@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 微信公众号「很多问题的小明同学」
+    url: https://github.com/gulugulupao/clamsentinel
+    about: 关于 ClamSentinel 的版本发布与使用提醒，可关注作者微信公众号获取。
+  - name: 项目讨论 / 常见问题
+    url: https://github.com/gulugulupao/clamsentinel/discussions
+    about: 功能讨论与使用交流请先到 Discussions 查看或提问。
