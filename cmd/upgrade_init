@@ -1,0 +1,3 @@
+#!/bin/bash
+### Called for upgrade_init.
+exit 0

@@ -1,0 +1,51 @@
+#!/bin/bash
+# ClamSentinel 卸载后回调：彻底清理 fpk 创建的所有进程、目录、用户、临时文件
+# 设计原则：
+#   1. 杀进程：sentinel.js / server / clamd（已被 pkill -f 包含）
+#             + freshclam-loop（nohup 派生的孤儿进程，pkill -f 杀不到，必须显式杀）
+#   2. 删目录：6 个 @app* 目录 + /var/apps/clamsentinel
+#   3. 删用户：clamsvc 用户/组（privilege 配置的应用专属用户）
+#   4. 清临时：/tmp 下可能留下的 cs_*.zip /tmp/cs_v*.zip 等
+#   5. 保留：@appshare/clamsentinel/{scan,quarantine}（用户文件，不动）
+#   ★ 强制清数据：卸载时显式删除 @appdata 下的累积扫描历史（data/jobs），
+#     确保重装后计数从 0 开始（不影响 10 分钟自动休眠）。
+set +e
+
+APP="${TRIM_APPDEST:-/vol1/@appcenter/clamsentinel}"
+VAR="${TRIM_PKGVAR:-/vol1/@appdata/clamsentinel}"
+ETC="${TRIM_PKGETC:-/vol1/@appconf/clamsentinel}"
+HOME="${TRIM_PKGHOME:-/vol1/@apphome/clamsentinel}"
+TMP="${TRIM_PKGTMP:-/vol1/@apptemp/clamsentinel}"
+META="${TRIM_PKGMETA:-/vol1/@appmeta/clamsentinel}"
+
+# 0) 强制清理运行时数据（累积扫描历史 jobs 等），卸载即清零
+rm -rf "$VAR/data" "$VAR/jobs" 2>/dev/null
+
+# 1) 杀 sentinel/web/clamd 进程
+pkill -f "$APP/sentinel.js" 2>/dev/null
+pkill -f "$APP/web/server.js" 2>/dev/null
+pkill -f "$APP/runtime/usr/sbin/clamd" 2>/dev/null
+pkill -f "$APP/runtime/usr/bin/freshclam" 2>/dev/null
+pkill -f "/var/apps/clamsentinel" 2>/dev/null
+# 1.1) ★ 杀 freshclam-loop 后台循环（按命令行特征匹配，不依赖 pid 文件）
+pkill -f 'freshclam-loop.log' 2>/dev/null
+sleep 1
+
+# 2) 清理 fpk 管理的所有目录
+rm -rf "$VAR" "$ETC" "$HOME" "$TMP" "$META" "$APP" "/var/apps/clamsentinel"
+
+# 3) 删除应用专属用户与组（privilege 配置的 username/groupname）
+#    必须在目录清完之后做（chown 已被 rm 替换为 root）
+if getent group clamsvc >/dev/null 2>&1; then
+    groupdel clamsvc 2>/dev/null
+fi
+if id -u clamsvc >/dev/null 2>&1; then
+    userdel clamsvc 2>/dev/null
+fi
+
+# 4) 清理 /tmp 下的 build 临时文件（/tmp/cs_*.zip 等不会自清）
+rm -f /tmp/cs_*.zip /tmp/cs_v*.zip /tmp/cs_*.tar.gz /tmp/cs_*.tar 2>/dev/null
+rm -rf /tmp/fnpack.* /tmp/runtime_rebuild 2>/dev/null
+
+# 5) @appshare/clamsentinel 用户文件保留（用户扫描内容，不动）
+exit 0

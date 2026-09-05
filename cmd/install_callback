@@ -1,0 +1,7 @@
+#!/bin/bash
+# 安装完成回调：确保内置运行时具备执行权限
+APP="${TRIM_APPDEST:-/vol1/@appcenter/clamsentinel}"
+chmod +x "$APP/cmd/main" "$APP/cmd/"*.sh 2>/dev/null
+chmod -R a+rX "$APP/runtime" 2>/dev/null
+chmod +x "$APP/runtime/usr/bin/node" "$APP/runtime/usr/bin/freshclam" "$APP/runtime/usr/sbin/clamd" 2>/dev/null
+exit 0

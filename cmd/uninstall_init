@@ -1,0 +1,3 @@
+#!/bin/bash
+### Called for uninstall_init.
+exit 0

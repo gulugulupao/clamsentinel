@@ -1,0 +1,9 @@
+{
+    "data-share": {
+        "shares": [
+            { "name": "clamsentinel",         "permission": { "rw": ["clamsentinel"] } },
+            { "name": "clamsentinel/scan",     "permission": { "rw": ["clamsentinel"] } },
+            { "name": "clamsentinel/quarantine", "permission": { "rw": ["clamsentinel"] } }
+        ]
+    }
+}

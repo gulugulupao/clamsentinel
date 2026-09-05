@@ -1,0 +1,15 @@
+appname               = clamsentinel
+version               = 1.0
+display_name          = ClamSentinel
+desc                  = ClamSentinel 哨兵杀毒 V1.0 —— ARM 版飞牛 OS 上的原生轻量防护方案。<br><br>1.ClamAV 权威病毒库：复用国际主流开源杀毒引擎的病毒库，安全可靠。<br>2.智能睡眠机制：Sentinel 守护进程空闲时自动停止 Web 与 clamd 进程，实测可释放约 1.05GB 内存（仅保留约 30MB），随叫随醒。<br>3.RK356x / 2GB 专项调优：为小运存设备深度优化，内存占用控制到极低。<br>4.免 Docker 独立部署：不依赖容器环境，减少一层开销，资源占用更干净
+source                = thirdparty
+platform              = arm
+maintainer            = 很多问题的小明同学
+distributor           = 很多问题的小明同学
+os_min_version        = 0.9.25
+desktop_uidir         = ui
+desktop_applaunchname = clamsentinel.Application
+service_port          = 8080
+checkport             = true
+ctl_stop              = true
+changelog             = V1.0 阈值改 10 分钟 + abandoned 状态 + reset-password CLI + install_init 父目录权限修复 + logo 重做。v3.3.1 sentinel 幂等 + checkport=false。v3.3.0 方案 B sentinel 守护。v3.2.x 暂停/继续 + 详情 + 24h 网格。

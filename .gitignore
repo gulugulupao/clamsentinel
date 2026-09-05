@@ -1,0 +1,13 @@
+# 运行时与构建产物（不提交）
+runtime/
+app.tgz
+*.fpk
+*.tgz
+*.bak
+*.zip
+
+# Python / 系统
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db

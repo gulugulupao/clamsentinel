@@ -1,0 +1,6 @@
+#!/bin/bash
+# Reset cumulative scan stats on fresh install so the count starts at 0.
+# Does NOT touch the 10-min auto-sleep logic (independent of scan history).
+VAR="${TRIM_PKGVAR:-/vol1/@appdata/clamsentinel}"
+rm -rf "$VAR/data/jobs" 2>/dev/null
+exit 0

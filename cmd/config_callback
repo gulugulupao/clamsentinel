@@ -1,0 +1,3 @@
+#!/bin/bash
+### Called for config_callback.
+exit 0

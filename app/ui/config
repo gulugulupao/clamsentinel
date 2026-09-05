@@ -1,0 +1,13 @@
+{
+    ".url": {
+        "clamsentinel.Application": {
+            "title": "ClamSentinel",
+            "icon": "images/icon_{0}.png",
+            "type": "url",
+            "protocol": "http",
+            "port": "8080",
+            "url": "/",
+            "allUsers": true
+        }
+    }
+}

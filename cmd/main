@@ -1,0 +1,394 @@
+#!/bin/bash
+# ClamSentinel · 哨兵杀毒 —— 原生生命周期（start / stop / status）
+# 不依赖 Docker：Node 运行时与 ClamAV 引擎随包内置，全部以宿主进程运行。
+set +e
+
+APP="${TRIM_APPDEST:-/vol1/@appcenter/clamsentinel}"
+VAR="${TRIM_PKGVAR:-/vol1/@appdata/clamsentinel}"
+if [ -d "/var/apps/clamsentinel/shares/clamsentinel" ]; then
+    SHARE="/var/apps/clamsentinel/shares/clamsentinel"
+else
+    SHARE="/vol1/@appshare/clamsentinel"
+fi
+
+RT="$APP/runtime"
+LD="$RT/usr/lib/aarch64-linux-gnu"
+BIN="$RT/usr/bin"
+SBIN="$RT/usr/sbin"
+NODE="$BIN/node"
+FRESHCLAM="$BIN/freshclam"
+CLAMD="$SBIN/clamd"
+
+DATA="$VAR/data"
+DB="$VAR/clamav-db"
+LOG="$VAR/log"
+RUN="$VAR/run"
+TMP="$VAR/tmp"
+SCAN="$SHARE/scan"
+QUAR="$SHARE/quarantine"
+
+CLAMDCONF="$VAR/clamd.conf"
+FRESHCONF="$VAR/freshclam.conf"
+SENTINELPID="$RUN/sentinel.pid"
+WEBPID="$RUN/web.pid"
+CLAMDPID="$RUN/clamd.pid"
+FLOOPPID="$RUN/freshclam-loop.pid"
+FFIRSTPID="$RUN/freshclam-first.pid"
+HTTP_PORT="${SERVICE_PORT:-8080}"
+# 注：WEB_INTERNAL_PORT 不能从外部 env 继承（旧值可能冲突）。固定为 8082（避开 caddy 占用 8081）。
+WEB_INTERNAL_PORT=8082
+CLAMD_TCP=3310
+
+log(){ echo "[clamsentinel][$(date '+%F %T')] $*"; }
+
+prepare_dirs () {
+    mkdir -p "$DATA" "$DB" "$LOG" "$RUN" "$TMP" "$SCAN" "$QUAR"
+    chmod 700 "$DATA" 2>/dev/null
+    chmod 1777 "$TMP" 2>/dev/null
+}
+
+write_configs () {
+    cat > "$CLAMDCONF" <<EOF
+LogFile $LOG/clamd.log
+LogTime yes
+LogRotate yes
+LogFileMaxSize 4M
+PidFile $CLAMDPID
+TemporaryDirectory $TMP
+DatabaseDirectory $DB
+LocalSocket $RUN/clamd.sock
+FixStaleSocket yes
+TCPSocket $CLAMD_TCP
+TCPAddr 127.0.0.1
+User root
+SelfCheck 3600
+# RK3566 (4 核) + 2GB RAM 设备推荐：MaxThreads=2 + 并发 2 路 CONTSCAN，内存峰值约 400MB，
+# 留 1.6GB 给系统。空闲时 clamd 几乎不耗内存。
+MaxThreads 2
+MaxQueue 100
+MaxScanSize 2G
+MaxFileSize 1G
+MaxRecursion 40
+MaxFiles 80000
+MaxEmbeddedPE 200M
+MaxHTMLNormalize 200M
+MaxScriptNormalize 40M
+MaxZipTypeRcg 2M
+MaxPartitions 128
+MaxIconsPE 256
+PCREMatchLimit 100000
+PCRERecMatchLimit 4000
+PCREMaxFileSize 200M
+StreamMaxLength 1G
+EOF
+    cat > "$FRESHCONF" <<EOF
+DatabaseDirectory $DB
+DatabaseOwner root
+UpdateLogFile $LOG/freshclam.log
+LogTime yes
+PidFile $RUN/freshclam.pid
+DatabaseMirror db.local.clamav.net
+DatabaseMirror database.clamav.net
+EOF
+    chmod 644 "$CLAMDCONF" "$FRESHCONF"
+}
+
+wait_tcp () {
+    local port="$1" tries="$2"
+    local i=0
+    while [ $i -lt "$tries" ]; do
+        if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+            exec 3>&- 3<&- 2>/dev/null
+            return 0
+        fi
+        sleep 2
+        i=$((i+1))
+    done
+    return 1
+}
+
+start_engine () {
+    # 立即启动 clamd（即便病毒库缺失也会 listen 3310；扫后返回 "ERROR" 但不影响 web 启动）
+    rm -f "$RUN/clamd.sock"
+    nohup env LD_LIBRARY_PATH="$LD" "$CLAMD" --config-file="$CLAMDCONF" </dev/null >>"$LOG/clamd.log" 2>&1 &
+    echo $! > "$CLAMDPID"
+}
+
+start_clamd_only () {
+    # 只启动 clamd（被 server.js 在 idle-then-restart 时调用）。不重启 freshclam 后台循环（避免冲突）。
+    if [ -f "$CLAMDPID" ] && kill -0 "$(cat "$CLAMDPID")" 2>/dev/null; then
+        log "clamd 已在运行（PID=$(cat "$CLAMDPID")），跳过重启"
+        return 0
+    fi
+    rm -f "$RUN/clamd.sock"
+    prepare_dirs
+    write_configs
+    chmod +x "$CLAMD" "$FRESHCLAM" 2>/dev/null
+    nohup env LD_LIBRARY_PATH="$LD" "$CLAMD" --config-file="$CLAMDCONF" </dev/null >>"$LOG/clamd.log" 2>&1 &
+    echo $! > "$CLAMDPID"
+    sleep 2
+    log "clamd 已重新启动 PID=$(cat "$CLAMDPID" 2>/dev/null)"
+}
+
+stop_clamd_only () {
+    # 只停 clamd（方案 B：idle 后停掉以释放 ~1GB 内存，web 保留）。不杀 freshclam 后台循环。
+    if [ ! -f "$CLAMDPID" ]; then
+        log "clamd PID 文件不存在，已是停止状态"
+        return 0
+    fi
+    PID="$(cat "$CLAMDPID" 2>/dev/null)"
+    if [ -n "$PID" ]; then
+        log "正在停止 clamd PID=$PID"
+        kill -TERM "$PID" 2>/dev/null
+        for i in 1 2 3 4 5; do
+            sleep 1
+            kill -0 "$PID" 2>/dev/null || break
+        done
+        kill -KILL "$PID" 2>/dev/null
+    fi
+    pkill -f "$APP/runtime/usr/sbin/clamd" 2>/dev/null
+    rm -f "$CLAMDPID" "$RUN/clamd.sock"
+    sleep 1
+    log "clamd 已停止（已释放 ~1GB RAM）"
+}
+
+start_sentinel () {
+    # 方案 B 主入口：sentinel 始终监听 :SERVICE_PORT(8080) 给 fnOS 做健康检查。
+    # 收到首个请求时 lazy 启动 web+clamd（释放 ~1GB RAM 直到首次访问）。
+    # 24 分钟无活动后自动停 web+clamd，sentinel 自己保留进程（< 50MB）。
+    rm -f "$SENTINELPID" "$WEBPID" "$CLAMDPID" "$RUN/clamd.sock"
+    nohup env LD_LIBRARY_PATH="$LD" \
+        NODE_BIN="$NODE" \
+        SENTINEL_PORT="$HTTP_PORT" \
+        WEB_PORT="$WEB_INTERNAL_PORT" \
+        IDLE_MS="${SENTINEL_IDLE_MS:-600000}" \
+        POLL_MS="${SENTINEL_POLL_MS:-20000}" \
+        WAKE_TIMEOUT_MS="${SENTINEL_WAKE_TIMEOUT_MS:-60000}" \
+        CLAMD_BIN="$CLAMD" \
+        CLAMD_CONF="$CLAMDCONF" \
+        CLAMD_PIDF="$CLAMDPID" \
+        CLAMD_SOCK="$RUN/clamd.sock" \
+        WEB_SCRIPT="$APP/web/server.js" \
+        WEB_PIDF="$WEBPID" \
+        JOBS_DIR="$VAR/jobs" \
+        LOG_FILE="$LOG/sentinel.log" \
+        PORT="$WEB_INTERNAL_PORT" \
+        DATA_DIR="$DATA" \
+        SCAN_SHARE="$SCAN" \
+        QUAR_DIR="$QUAR" \
+        CLAMD_HOST=127.0.0.1 CLAMD_PORT="$CLAMD_TCP" \
+        DB_MOUNT="$DB" \
+        FRESHCLAM_BIN="$BIN/freshclam" \
+        FRESHCLAM_CONF="$FRESHCONF" \
+        "$NODE" "$APP/sentinel.js" </dev/null >> "$LOG/sentinel.log" 2>&1 &
+    echo $! > "$SENTINELPID"
+}
+
+do_start () {
+    log "启动 (APP=$APP)"
+    prepare_dirs
+    write_configs
+    chmod +x "$NODE" "$FRESHCLAM" "$CLAMD" 2>/dev/null
+
+    # ★ v3.3.1 幂等检查：sentinel 已在运行就直接返回成功，不再启动
+    #   解决 fnOS 应用中心"端口被占用"误报（应用中心预检 8080 端口时，
+    #   不知道占用者就是 clamsentinel 自己的 sentinel）
+    if [ -f "$SENTINELPID" ] && kill -0 "$(cat "$SENTINELPID" 2>/dev/null)" 2>/dev/null; then
+        local EXISTING_PID=$(cat "$SENTINELPID" 2>/dev/null)
+        log "sentinel 已在运行 PID=$EXISTING_PID，跳过启动（幂等）"
+        # 仍确保 freshclam-loop 跑（用户期望后台病毒库更新）
+        # V1.0g: 用 pgrep 按命令行特征检测（防孤儿重复启动）
+        if ! pgrep -f 'freshclam-loop.log' >/dev/null 2>&1; then
+            nohup bash -c "
+                while true; do
+                sleep 7200
+                env LD_LIBRARY_PATH='$LD' '$FRESHCLAM' --config-file='$FRESHCONF' >>'$LOG/freshclam-loop.log' 2>&1
+                if [ -f '$CLAMDPID' ]; then kill -HUP \$(cat '$CLAMDPID') 2>/dev/null; fi
+                done
+            " </dev/null >/dev/null 2>&1 &
+            echo $! > "$FLOOPPID"
+        fi
+        # 等端口就绪（已经在了，秒成功）
+        if wait_tcp "$HTTP_PORT" 2; then log "端口 $HTTP_PORT 已就绪"; fi
+        return 0
+    fi
+
+    # 清残留 PID + socket（防止 stale pid 让新进程启动失败）
+    rm -f "$WEBPID" "$CLAMDPID" "$RUN/clamd.sock"
+    # 上一次如果 sentinel 死得不干净，pid 文件残留。强清。
+    if [ -f "$SENTINELPID" ]; then
+        local STALE=$(cat "$SENTINELPID" 2>/dev/null)
+        if [ -n "$STALE" ] && ! kill -0 "$STALE" 2>/dev/null; then
+            rm -f "$SENTINELPID"
+        fi
+    fi
+
+    # 首次运行：病毒库后台异步下载（不阻塞 cmd/main start）；下载完成后给 clamd 发 HUP 让其自动 reload
+    if ! ls "$DB"/*.cvd* >/dev/null 2>&1; then
+        log "首次启动：病毒库在后台下载（约 1-3 分钟），期间 Web 可正常访问"
+        nohup bash -c "
+            env LD_LIBRARY_PATH='$LD' '$FRESHCLAM' --config-file='$FRESHCONF' >>'$LOG/freshclam-first.log' 2>&1
+            if [ -f '$CLAMDPID' ]; then kill -HUP \$(cat '$CLAMDPID') 2>/dev/null; fi
+        " </dev/null >/dev/null 2>&1 &
+        echo $! > "$FFIRSTPID"
+    fi
+
+    # 周期更新（每 2 小时一次）—— 与 sentinel 唤醒机制独立跑，sentinel 睡眠时病毒库也会自动更新
+    # V1.0g: 用 pgrep 按命令行特征检测（防孤儿重复启动）
+    if ! pgrep -f 'freshclam-loop.log' >/dev/null 2>&1; then
+        nohup bash -c "
+            while true; do
+                sleep 7200
+                env LD_LIBRARY_PATH='$LD' '$FRESHCLAM' --config-file='$FRESHCONF' >>'$LOG/freshclam-loop.log' 2>&1
+                if [ -f '$CLAMDPID' ]; then kill -HUP \$(cat '$CLAMDPID') 2>/dev/null; fi
+            done
+        " </dev/null >/dev/null 2>&1 &
+        echo $! > "$FLOOPPID"
+    fi
+
+    # 启动 sentinel 替代 web。sentinel 会按需启动 clamd+web。
+    start_sentinel
+
+    # 等 sentinel 端口 listen 上再退出，给 fnOS appcenter 留足健康检查窗口
+    log "等待 $HTTP_PORT 端口就绪 (sentinel)..."
+    if wait_tcp "$HTTP_PORT" 5; then
+        log "sentinel 已就绪 PID=$(cat $SENTINELPID 2>/dev/null) · 等首个 HTTP 请求唤醒 web+clamd"
+    else
+        log "sentinel 启动中（或未就绪）PID=$(cat $SENTINELPID 2>/dev/null)"
+    fi
+    return 0
+}
+
+do_stop () {
+    log "停止"
+    # ★ v3.3.1 幂等：如果 sentinel 没在跑就直接返回
+    if [ ! -f "$SENTINELPID" ] || ! kill -0 "$(cat "$SENTINELPID" 2>/dev/null)" 2>/dev/null; then
+        # 清残留 PID 文件
+        rm -f "$SENTINELPID" "$WEBPID" "$CLAMDPID" "$FLOOPPID" "$FFIRSTPID" "$RUN/clamd.sock"
+        pkill -f "$APP/sentinel.js" 2>/dev/null
+        pkill -f "$APP/web/server.js" 2>/dev/null
+        pkill -f "$APP/runtime/usr/sbin/clamd" 2>/dev/null
+        pkill -f "$APP/runtime/usr/bin/freshclam" 2>/dev/null
+        # V1.0g: 兜底杀所有 freshclam-loop 外层 bash（命令行含 freshclam-loop.log）
+        pkill -f 'freshclam-loop.log' 2>/dev/null
+        log "已是停止状态"
+        return 0
+    fi
+    # 正常停止流程
+    for pf in "$SENTINELPID" "$FLOOPPID" "$FFIRSTPID"; do
+        [ -f "$pf" ] && kill "$(cat "$pf")" 2>/dev/null
+        rm -f "$pf"
+    done
+    pkill -f "$APP/sentinel.js" 2>/dev/null
+    pkill -f "$APP/web/server.js" 2>/dev/null
+    pkill -f "$APP/runtime/usr/sbin/clamd" 2>/dev/null
+    pkill -f "$APP/runtime/usr/bin/freshclam" 2>/dev/null
+    pkill -f 'freshclam-loop.log' 2>/dev/null
+    rm -f "$WEBPID" "$CLAMDPID" "$RUN/clamd.sock"
+    return 0
+}
+
+is_running () {
+    # 仅看 sentinel 进程是否在，足够 fnOS 健康检查。web+clamd 可以是睡着的。
+    [ -f "$SENTINELPID" ] && kill -0 "$(cat "$SENTINELPID")" 2>/dev/null
+}
+
+# ★ v3.3.1 reset-password [username]：把指定用户的密码重置为临时密码。
+#   临时密码固定为 test1234（用户登录后必须立即到「系统设置」修改！）
+#   hash 算法：s1:<salt 16 hex>:<key 64 hex>（与 web 端 hashPin 函数一致）
+reset_password () {
+    local TARGET="${1:-}"
+    local HASH='s1:9738185d0de22d5f56ad9d11:1aacd4fc9eb01d43b29bcae3aa43786c4305bbf3dbf19802227ffe6d99f6bf5b'
+
+    # 写入独立 python 脚本到 $TMP，避免 shell 引号嵌套和 f-string 转义问题
+    local PYHELPER="$TMP/cs_reset_pw.py"
+    cat > "$PYHELPER" <<'PYEOF'
+import json, sys, os
+fp = os.environ.get('USERS_JSON', '')
+HASH = os.environ.get('NEW_HASH', '')
+target = sys.argv[1] if len(sys.argv) > 1 else ''
+mode = sys.argv[2] if len(sys.argv) > 2 else 'reset'
+
+if mode == 'list':
+    try:
+        with open(fp, encoding='utf-8') as f:
+            d = json.load(f)
+        print('users.json 中存在的用户:')
+        for k, v in d.get('users', {}).items():
+            role = v.get('role', '?')
+            print('  - ' + k + ' (role: ' + str(role) + ')')
+    except Exception as e:
+        print('(读取失败: ' + str(e) + ')')
+    sys.exit(0)
+
+if not target:
+    print('错误：缺少 username 参数')
+    sys.exit(2)
+try:
+    with open(fp, encoding='utf-8') as f:
+        d = json.load(f)
+    users = d.get('users', {})
+    if target not in users:
+        print('错误：用户 "' + target + '" 不存在。可用用户: ' + str(list(users.keys())))
+        sys.exit(2)
+    users[target]['hash'] = HASH
+    with open(fp, 'w', encoding='utf-8') as f:
+        json.dump(d, f, indent=2, ensure_ascii=False)
+    print('OK 已将用户 "' + target + '" 密码重置为 test1234')
+    print('  请立即用 test1234 登录，再到系统设置改成你自己的密码')
+except Exception as e:
+    print('错误: ' + str(e))
+    sys.exit(2)
+PYEOF
+
+    if [ -z "$TARGET" ]; then
+        # 列出用户
+        if [ -f "$DATA/users.json" ]; then
+            log "users.json 中存在的用户："
+            USERS_JSON="$DATA/users.json" NEW_HASH="$HASH" python3 "$PYHELPER" 0 list 2>&1
+        else
+            log "找不到 users.json：$DATA/users.json"
+            exit 2
+        fi
+        echo
+        echo "用法: $0 reset-password <username>"
+        echo "  把指定用户的密码重置为 test1234（登录后请到系统设置修改）"
+        exit 1
+    fi
+
+    if [ ! -f "$DATA/users.json" ]; then
+        log "找不到 users.json，请先完成首次初始化（浏览器打开 :8080 设置密码）"
+        exit 2
+    fi
+    USERS_JSON="$DATA/users.json" NEW_HASH="$HASH" python3 "$PYHELPER" "$TARGET" reset 2>&1
+}
+
+case "$1" in
+start)
+    # 不再做 do_stop 预清理：do_start 内部已经会用 nohup 派发新进程并覆盖 pid 文件，
+    # 之前的 sleep 2 经常让 appcenter-cli 整体超时。install_init 已负责彻底清残留。
+    do_start
+    ;;
+stop)
+    do_stop
+    ;;
+status)
+    is_running && exit 0 || exit 3
+    ;;
+clamd-on)
+    # 仅启动 clamd（server.js idle-then-restart 时调用）
+    start_clamd_only
+    ;;
+clamd-off)
+    # 仅停 clamd（释放 ~1GB RAM；web 仍在 8080 上运行以保持 idle 调度）
+    stop_clamd_only
+    ;;
+reset-password)
+    shift
+    reset_password "$@"
+    ;;
+*)
+    echo "usage: $0 {start|stop|status|clamd-on|clamd-off|reset-password <username>}" >&2
+    exit 1
+    ;;
+esac

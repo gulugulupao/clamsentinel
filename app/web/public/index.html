@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="referrer" content="no-referrer">
+<title>ClamSentinel · 哨兵杀毒</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!-- ===== 首屏加载 ===== -->
+<div id="boot">
+  <div class="boot-shield">
+    <svg viewBox="0 0 64 64" width="46" height="46" aria-hidden="true">
+      <path d="M32 4 L56 12 v18 c0 15 -10 26 -24 30 C18 56 8 45 8 30 V12 Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+      <path d="M20 32 l8 8 l16 -16" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </div>
+  <div class="boot-text">ClamSentinel 正在启动…</div>
+</div>
+
+<!-- ===== 初始化 / 登录 ===== -->
+<section id="auth-view" class="auth-wrap hidden">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <svg viewBox="0 0 64 64" width="44" height="44" aria-hidden="true">
+        <path d="M32 4 L56 12 v18 c0 15 -10 26 -24 30 C18 56 8 45 8 30 V12 Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+        <path d="M20 32 l8 8 l16 -16" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <h1 class="auth-title" id="auth-title">登录</h1>
+    <p class="auth-sub" id="auth-sub">请输入管理员账号</p>
+    <form id="auth-form" autocomplete="off" data-mode="login">
+      <div class="field">
+        <label>用户名</label>
+        <input id="auth-user" type="text" placeholder="管理员用户名" autocomplete="username">
+      </div>
+      <div class="field">
+        <label>密码</label>
+        <input id="auth-pass" type="password" placeholder="密码" autocomplete="current-password">
+      </div>
+      <div id="auth-pass2-field" class="field">
+        <label>确认密码</label>
+        <input id="auth-pass2" type="password" placeholder="再次输入密码" autocomplete="new-password">
+      </div>
+      <div id="auth-err" class="form-err hidden"></div>
+      <button id="auth-btn" class="btn btn-primary btn-block" type="submit">进入系统</button>
+    </form>
+    <p class="auth-foot" id="auth-foot"></p>
+  </div>
+</section>
+
+<!-- ===== 主应用 ===== -->
+<div id="app" class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <svg viewBox="0 0 64 64" width="30" height="30" aria-hidden="true">
+        <path d="M32 4 L56 12 v18 c0 15 -10 26 -24 30 C18 56 8 45 8 30 V12 Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+        <path d="M20 32 l8 8 l16 -16" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div class="brand-text">
+        <strong>ClamSentinel</strong>
+        <span>哨兵杀毒</span>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="#/dashboard" data-nav="dashboard" class="nav-item active">状态面板</a>
+      <a href="#/scan" data-nav="scan" class="nav-item">病毒扫描</a>
+      <a href="#/records" data-nav="records" class="nav-item">扫描记录</a>
+      <a href="#/quarantine" data-nav="quarantine" class="nav-item">隔离区</a>
+      <a href="#/settings" data-nav="settings" class="nav-item">系统设置</a>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="who">管理员：<span id="who-name"></span></div>
+      <button id="logout-btn" class="btn btn-ghost btn-sm">退出登录</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="crumb" id="crumb"></div>
+      <div class="top-actions" id="top-actions"></div>
+      <div id="sys-widget" class="sys-widget" title="系统实时采样 · 每 3 秒刷新">
+        <div class="sys-row" id="sys-cpu-row">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
+          <span class="sys-label">CPU</span>
+          <span class="sys-val" id="sys-cpu-val">—</span>
+          <div class="sys-bar"><i id="sys-cpu-bar" style="width:0%"></i></div>
+          <span class="sys-sub" id="sys-cores-val">—</span>
+        </div>
+        <div class="sys-row" id="sys-ram-row">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10v4M11 10v4M15 10v4"/></svg>
+          <span class="sys-label">RAM</span>
+          <span class="sys-val" id="sys-ram-val">—</span>
+          <div class="sys-bar"><i id="sys-ram-bar" style="width:0%"></i></div>
+          <span class="sys-sub" id="sys-ram-sub">—</span>
+        </div>
+      </div>
+    </header>
+    <section id="view" class="view"></section>
+    <!-- JS 错误兜底显示：app.js 任何异常都会落到这里，方便排查 -->
+    <div id="app-error" class="hidden" style="padding:18px 22px;color:var(--danger-text,#ff6b6b);font-size:13px;line-height:1.7"></div>
+  </main>
+</div>
+
+<div id="toast-root" class="toast-root"></div>
+<div id="confirm-root"></div>
+
+<script src="app.js?v=V1.0k"></script>
+</body>
+</html>
