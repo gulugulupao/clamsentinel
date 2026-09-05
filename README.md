@@ -6,6 +6,9 @@
 
 **飞牛 fnOS（ARM）上的原生轻量病毒扫描中心 · 不依赖 Docker**
 
+[![Stars](https://img.shields.io/github/stars/gulugulupao/clamsentinel?color=yellow)](https://github.com/gulugulupao/clamsentinel/stargazers)
+[![Downloads](https://img.shields.io/github/downloads/gulugulupao/clamsentinel/total?color=green)](https://github.com/gulugulupao/clamsentinel/releases)
+
 [![License](https://img.shields.io/badge/License-MIT%20%2B%20Protection-green.svg)](LICENSE.txt)
 ![Platform](https://img.shields.io/badge/Platform-fnOS%20ARM%20(RK356x)-blue.svg)
 ![Version](https://img.shields.io/badge/Version-V1.0-orange.svg)
