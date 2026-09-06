@@ -10,8 +10,8 @@
 [![Downloads](https://img.shields.io/github/downloads/gulugulupao/clamsentinel/total?color=green)](https://github.com/gulugulupao/clamsentinel/releases)
 
 [![License](https://img.shields.io/badge/License-MIT%20%2B%20Protection-green.svg)](LICENSE.txt)
-![Platform](https://img.shields.io/badge/Platform-fnOS%20ARM%20(RK356x)-blue.svg)
-![Version](https://img.shields.io/badge/Version-V1.0-orange.svg)
+![Platform](https://img.shields.io/badge/Platform-fnOS%20ARM%20(RK35XX%2FA311D)-blue.svg)
+![Version](https://img.shields.io/badge/Version-V1.0.4b-orange.svg)
 ![Engine](https://img.shields.io/badge/Engine-ClamAV%201.4.3-brightgreen.svg)
 
 **作者：[gulugulupao](https://github.com/gulugulupao) · 微信公众号：很多问题的小明同学**
@@ -39,12 +39,14 @@
 
 ## 📌 项目简介
 
-**ClamSentinel** 是一款运行在飞牛 fnOS（ARM 版）上的病毒扫描应用，为 RK356x / 2GB 小运存设备深度调优。
+**ClamSentinel** 是一款运行在飞牛 fnOS（ARM 版）上的病毒扫描应用，为 **RK35XX（RK3566 / RK3568 / RK3399 等）与晶晨 A311D** 设备深度调优。
 
 1. **ClamAV 权威病毒库**：复用国际主流开源杀毒引擎 ClamAV 的病毒库，安全可靠，由思科 Talos 团队持续维护。
 2. **智能睡眠机制**：Sentinel 守护进程空闲时自动停止 Web 与 clamd 进程，实测可释放约 **1.05GB 内存**（仅保留约 30MB），随叫随醒。
-3. **RK356x / 2GB 专项调优**：为小运存设备深度优化，内存占用控制到极低。
+3. **RK35XX / A311D / 2GB 专项调优**：为小运存设备深度优化，内存占用控制到极低。
 4. **免 Docker 独立部署**：不依赖容器环境，减少一层开销，资源占用更干净。
+
+> ✅ **已实测适配芯片**：瑞芯微 RK35XX 系列（RK3566 / RK3568 / RK3399）与晶晨 A311D（网心云 OES 等设备）。
 
 <a id="features"></a>
 
@@ -54,7 +56,8 @@
 - 🔬 **单文件或整目录扫描**：Web 界面浏览目录，随时发起扫描
 - ⏸️ **暂停 / 继续**：扫描中随时暂停，不丢失已完成进度
 - 🛡️ **威胁隔离**：检出文件可一键隔离，支持恢复或彻底删除
-- 🔄 **病毒库自动更新**：后台 freshclam 每 2 小时自动检查更新
+- 🔄 **病毒库自动更新**：后台 freshclam 每 2 小时自动检查更新；首次下载失败会自动退避重试（20s→900s，最多 8 次）
+- 🛡️ **就绪判定收紧**：必须 `main.cvd` + `daily.cvd` 齐全才判定"病毒库已就绪"，避免只下了部分库就误报可用
 - 💤 **智能休眠**：10 分钟无活动自动停 web+clamd，释放约 1.05GB 内存
 - 📊 **扫描记录统计**：历史扫描状态清晰可查
 
@@ -65,7 +68,7 @@
 | 项目 | 要求 |
 | --- | --- |
 | 系统 | 飞牛 fnOS ARM 版（0.9.25+，推荐 1.2.x）|
-| 芯片 | RK3566 / RK3568 / RK3399 等 ARM 设备 |
+| 芯片 | 瑞芯微 **RK35XX**（RK3566 / RK3568 / RK3399 等）、晶晨 **A311D**、其他 ARM64 设备 |
 | 内存 | 2GB 及以上（2GB 经专项调优可用）|
 | 存储 | 约 300MB（运行时 + 病毒库）|
 

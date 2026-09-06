@@ -5,7 +5,7 @@
 
 MIT License
 
-Copyright (c) 2026 很多问题的小明同学 (GitHub @gulugulupao)
+Copyright (c) 2026 很多问题的小明同学（GitHub @gulugulupao）
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

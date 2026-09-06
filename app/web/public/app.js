@@ -101,9 +101,10 @@ async function renderDashboard() {
   try { d = await api('/api/dashboard'); } catch (e) { return showError(e.message); }
   try { dbCfg = await api('/api/db/settings'); } catch (e) { dbCfg = { auto: true, hour: 9 }; }
   try { sentinelInfo = await api('/api/sentinel'); } catch (e) { sentinelInfo = { mode: 'unknown' }; }
+  const dbDownloading = !!d.db.downloading;
   const engineLoading = !d.engine.online && !d.db.present;
   const engCls = d.engine.online ? 'on' : (engineLoading ? 'loading' : 'off');
-  const engTxt = d.engine.online ? '扫描引擎在线' : (engineLoading ? '病毒库加载中' : '扫描引擎离线');
+  const engTxt = d.engine.online ? '扫描引擎在线' : (dbDownloading ? '病毒库下载中' : (engineLoading ? '病毒库加载中' : '扫描引擎离线'));
   // 方案 B：sentinel 模式 — 'sleep' (web+clamd 都停) / 'active' (都在) / 'waking' / 'sleeping'
   const sensorLine = (function () {
     const m = sentinelInfo.mode;
@@ -124,7 +125,9 @@ async function renderDashboard() {
   const dbFiles = (d.db.files || []).map(f => f.replace(/\.(cvd|cld)$/i, '')).join('、') || 'main、daily、bytecode';
   const dbTxt = d.db.present
     ? '病毒库已就绪'
-    : '病毒库尚未生成（首次启动请耐心等待）';
+    : (dbDownloading
+        ? '病毒库下载中…（约 1-3 分钟，若失败会自动退避重试）'
+        : '病毒库未就绪（缺 ' + ((d.db.missing || []).join('、') || 'main、daily') + '）· 点「立即更新病毒库」重试');
   const recent = d.recent.length
     ? d.recent.map((r) => `
       <div class="row">
@@ -134,9 +137,16 @@ async function renderDashboard() {
       </div>`).join('')
     : '<div class="muted small" style="text-align:center;padding:14px">暂无扫描记录</div>';
 
+  // 病毒库下载中：每 15 秒自动刷新一次仪表盘（就绪后自然停止，切页也不会残留）
+  if (dbDownloading && !d.engine.online) {
+    setTimeout(() => {
+      try { if (location.hash.indexOf('dashboard') >= 0) renderDashboard(); } catch (e) {}
+    }, 15000);
+  }
+
   viewShell(`
     <div class="grid cols-4">
-      <div class="card stat"><div class="num ok-text">${d.engine.online ? '在线' : (engineLoading ? '加载中' : '离线')}</div><div class="lbl">扫描引擎</div></div>
+      <div class="card stat"><div class="num ok-text">${d.engine.online ? '在线' : (dbDownloading ? '下载中' : (engineLoading ? '加载中' : '离线'))}</div><div class="lbl">扫描引擎</div></div>
       <div class="card stat"><div class="num">${d.totals.scans}</div><div class="lbl">累计扫描次数</div></div>
       <div class="card stat"><div class="num">${d.totals.files}</div><div class="lbl">累计扫描文件</div></div>
       <div class="card stat"><div class="num ${d.totals.threats ? 'danger-text' : 'ok-text'}">${d.totals.threats}</div><div class="lbl">累计检出威胁</div></div>

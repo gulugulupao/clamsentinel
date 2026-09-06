@@ -1077,10 +1077,12 @@ async function handleApi(req, res, url) {
       ping = (await clamdRequest('PING', { timeoutMs: 4000 })) === 'PONG';
     } catch (e) { ping = false; }
     const dbBuild = (engineText.match(/\/(\d+)\//) || [])[1] || null;
-    let dbInfo = { present: false, updated: null, build: null, files: [] };
+    let dbInfo = { present: false, updated: null, build: null, files: [], downloading: false, missing: [] };
     try {
-      // 同时检查 main.cvd / daily.cvd / bytecode.cvd 任何一个存在就算已就绪
+      // V1.0z: main.cvd + daily.cvd 必须齐全才算就绪（bytecode.cvd 可选，仅影响解包能力），
+      // 避免"只下了 daily 就判定就绪"导致重启后不再触发首跑、长期缺 main.cvd。
       const dbFiles = ['main.cvd', 'daily.cvd', 'bytecode.cvd'];
+      const required = ['main.cvd', 'daily.cvd'];
       let bestMtime = null;
       const presentFiles = [];
       for (const f of dbFiles) {
@@ -1090,7 +1092,14 @@ async function handleApi(req, res, url) {
           if (!bestMtime || st.mtime > bestMtime) bestMtime = st.mtime;
         } catch (e) {}
       }
-      if (presentFiles.length > 0) {
+      // freshclam 下载期间会在库目录建 tmp.xxxx 临时目录，据此判断"正在下载"
+      let downloading = false;
+      try {
+        const ents = await fsp.readdir(DB_MOUNT);
+        downloading = ents.some((n) => n.indexOf('tmp.') === 0);
+      } catch (e) { downloading = false; }
+      const missing = required.filter((f) => presentFiles.indexOf(f) < 0);
+      if (missing.length === 0) {
         let dbSize = 0;
         try { dbSize = (await fsp.stat(DB_MOUNT)).size || 0; } catch (e) { dbSize = 0; }
         dbInfo = {
@@ -1099,6 +1108,17 @@ async function handleApi(req, res, url) {
           build: dbBuild,
           files: presentFiles,
           size: dbSize,
+          downloading: false,
+          missing: [],
+        };
+      } else {
+        dbInfo = {
+          present: false,
+          updated: null,
+          build: null,
+          files: presentFiles,
+          downloading,
+          missing,
         };
       }
     } catch (e) {}
