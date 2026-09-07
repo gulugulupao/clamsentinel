@@ -149,7 +149,7 @@ async function renderDashboard() {
       <div class="card stat"><div class="num ok-text">${d.engine.online ? '在线' : (dbDownloading ? '下载中' : (engineLoading ? '加载中' : '离线'))}</div><div class="lbl">扫描引擎</div></div>
       <div class="card stat"><div class="num">${d.totals.scans}</div><div class="lbl">累计扫描次数</div></div>
       <div class="card stat"><div class="num">${d.totals.files}</div><div class="lbl">累计扫描文件</div></div>
-      <div class="card stat"><div class="num ${d.totals.threats ? 'danger-text' : 'ok-text'}">${d.totals.threats}</div><div class="lbl">累计检出威胁</div></div>
+      <div class="card stat link-stat" data-act="threats" title="点击查看检出威胁清单"><div class="num ${d.totals.threats ? 'danger-text' : 'ok-text'}">${d.totals.threats}</div><div class="lbl">累计检出威胁</div></div>
     </div>
 
     <div class="grid cols-2 mt18">
@@ -257,6 +257,8 @@ async function bindDbControls() {
     } catch (e) { toast(e.message, 'err'); }
   });
   // v3.3.0: 「立即停用」—— 仅 sentinel + web+clamd 立即全停。重启需去 fnOS 应用中心。
+  // 状态面板「累计检出威胁」卡片：点击跳转到威胁清单
+  $$('#view [data-act="threats"]').forEach((el) => el.addEventListener('click', () => { location.hash = '#/threats'; }));
   if ($svcShut) $svcShut.addEventListener('click', async () => {
     if (!confirm('立即停用 ClamSentinel 将：\n\n· 关闭 sentinel（端口 8080 立即无响应）\n· 关闭 web+clamd（释放约 1 GB 内存）\n· 关闭 freshclam 后台循环\n\n从应用中心「开始」可重新启动。\n\n确认停用？')) return;
     $svcShut.disabled = true;
@@ -554,6 +556,39 @@ async function renderRecords() {
   $$('#view [data-detail]').forEach((b) => b.addEventListener('click', () => renderRecordDetail(b.dataset.detail)));
 }
 
+/* ------- 威胁清单（跨任务聚合） ------- */
+async function renderThreats() {
+  let d;
+  try { d = await api('/api/jobs'); } catch (e) { return showError(e.message); }
+  const items = [];
+  (d.jobs || []).forEach((j) => {
+    (j.threats || []).forEach((t) => {
+      items.push({ at: j.createdAt, target: (j.display || j.rootLabel || '').trim(), rel: t.rel, name: t.name, jobId: j.id });
+    });
+  });
+  items.sort((a, b) => ((a.at || '') < (b.at || '') ? 1 : -1));
+  const rows = items.length
+    ? items.map((it) => `
+      <tr>
+        <td class="small muted">${fmtTime(it.at)}</td>
+        <td class="small mono" style="word-break:break-all">${esc(it.rel)}</td>
+        <td><span class="chip threat">${esc(it.name)}</span></td>
+        <td class="small muted">${esc(it.target || '—')}</td>
+        <td><button class="btn btn-sm" data-detail="${esc(it.jobId)}">记录</button></td>
+      </tr>`).join('')
+    : '<tr><td colspan="5" class="empty">尚未检出任何威胁，请先进行扫描</td></tr>';
+  viewShell(`
+    <div class="card">
+      <h3>威胁清单（累计 ${items.length} 项）</h3>
+      <p class="small muted" style="margin-top:0;line-height:1.8">列出各次扫描检出的所有威胁<b>文件路径</b>。如需隔离 / 删除等处置，请点击该威胁对应的「记录」进入任务详情操作。</p>
+      <table class="list">
+        <thead><tr><th>检出时间</th><th>文件路径</th><th>威胁名</th><th>扫描目标</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`);
+  $$('#view [data-detail]').forEach((b) => b.addEventListener('click', () => renderRecordDetail(b.dataset.detail)));
+}
+
 function statusChip(st) {
   const map = {
     running: ['running', '进行中'],
@@ -594,7 +629,7 @@ async function renderRecordDetail(id) {
       <div class="row"><span class="k">已扫描对象</span><span class="v">${j.scannedFiles || 0}</span></div>
       <div class="row"><span class="k">抽样文件路径</span><span class="v small muted">${samples.length} 个${j.scannedFiles > samples.length ? '（最多保留前 200 个）' : ''}</span></div>
       <div class="row"><span class="k">检出威胁</span><span class="v ${j.threatCount ? 'danger-text' : ''}">${j.threatCount || 0}${j.truncated ? '（明细已截断）' : ''}</span></div>
-      <div class="row"><span class="k">错误</span><span class="v small muted">${errs.length} 条${errs.length ? '（多为不可读文件/目录）' : ''}</span></div>
+      <div class="row"><span class="k">错误</span><span class="v small muted">${errs.length ? `<a href="javascript:void(0)" data-act="show-errors" style="color:var(--warn,#f5a623);text-decoration:underline;cursor:pointer">${errs.length} 条（点击查看明细）</a>` : '0 条'}</span></div>
     </div>
 
     <div class="card mt18">
@@ -617,11 +652,36 @@ async function renderRecordDetail(id) {
       <tbody>${trRows}</tbody></table>
     </div>` : ''}
 
-    ${errs.length ? `<div class="card mt18"><h3>错误/告警（前 200 条）</h3><div class="small muted mono" style="line-height:1.9;max-height:220px;overflow:auto">${errs.map(esc).join('<br>')}</div></div>` : ''}
+    ${errs.length ? `<div class="card mt18" id="err-detail">
+      <div class="toolbar mb10" style="align-items:center">
+        <h3 style="margin:0">错误 / 告警明细（前 200 条）</h3>
+        <button class="btn btn-sm" id="copy-errors" style="margin-left:auto">复制全部</button>
+      </div>
+      <div class="small muted mono" style="line-height:1.9;max-height:300px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:10px">${errs.map((e) => `· ${esc(e)}`).join('<br>')}</div>
+    </div>` : ''}
   `);
 
   // 详情返回记录：用 addEventListener 而非 inline onclick，避开某些浏览器的安全策略差异
   $$('#view [data-act="back-records"]').forEach((el) => el.addEventListener('click', () => { location.hash = '#/records'; }));
+
+  // 错误条数点击 → 平滑滚动到错误明细卡片
+  $$('#view [data-act="show-errors"]').forEach((el) => el.addEventListener('click', () => {
+    const box = $('#err-detail');
+    if (box) { box.scrollIntoView({ behavior: 'smooth', block: 'start' }); box.style.boxShadow = '0 0 0 2px var(--warn,#f5a623)'; setTimeout(() => { box.style.boxShadow = ''; }, 2000); }
+  }));
+  // 复制全部错误明细
+  const copyBtn = $('#copy-errors');
+  if (copyBtn) copyBtn.addEventListener('click', () => {
+    const text = (j.errors || []).join('\n');
+    if (!text) return toast('暂无错误明细', 'err');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => toast('已复制全部错误明细', 'ok')).catch(() => toast('复制失败', 'err'));
+    } else {
+      const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); toast('已复制全部错误明细', 'ok'); } catch (_) { toast('复制失败', 'err'); }
+      ta.remove();
+    }
+  });
 
   if (threats.length) {
     bindDispose(id, threats.length);
@@ -746,6 +806,7 @@ async function route() {
     '#/dashboard': renderDashboard,
     '#/scan': () => renderScan(''),
     '#/records': renderRecords,
+    '#/threats': renderThreats,
     '#/quarantine': renderQuarantine,
     '#/settings': renderSettings,
   };
@@ -753,6 +814,7 @@ async function route() {
     '#/dashboard': '状态面板',
     '#/scan': '病毒扫描',
     '#/records': '扫描记录',
+    '#/threats': '威胁清单',
     '#/quarantine': '隔离区',
     '#/settings': '系统设置',
   };
