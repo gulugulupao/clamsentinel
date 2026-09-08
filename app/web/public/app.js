@@ -97,10 +97,11 @@ let currentRoot = 'scan'; // 用户当前选中的扫描根 id
 function viewShell(html) { $('#view').innerHTML = html; }
 
 async function renderDashboard() {
-  let d, dbCfg, sentinelInfo;
+  let d, dbCfg, sentinelInfo, perf;
   try { d = await api('/api/dashboard'); } catch (e) { return showError(e.message); }
   try { dbCfg = await api('/api/db/settings'); } catch (e) { dbCfg = { auto: true, hour: 9 }; }
   try { sentinelInfo = await api('/api/sentinel'); } catch (e) { sentinelInfo = { mode: 'unknown' }; }
+  try { perf = await api('/api/perf'); } catch (e) { perf = { mode: 'balanced', label: '均衡模式', cores: 2, concurrent: 2 }; }
   const dbDownloading = !!d.db.downloading;
   const engineLoading = !d.engine.online && !d.db.present;
   const engCls = d.engine.online ? 'on' : (engineLoading ? 'loading' : 'off');
@@ -158,7 +159,8 @@ async function renderDashboard() {
         <div class="row"><span class="k engine">定时引擎</span><span class="v mono small">${sensorLine}</span></div>
         <div class="row"><span class="k">病毒库</span><span class="v small">${dbTxt}</span></div>
         <div class="row"><span class="k">隔离区</span><span class="v ${d.quarantineCount ? 'warn-text' : ''}">${d.quarantineCount} 项</span></div>
-        <div class="row"><span class="k">扫描进行中</span><span class="v">${d.scanning ? (d.scanPaused ? '<span class="chip chip-paused">⏸ 已暂停</span>' : '<span class="chip running">运行中</span>') : '空闲'}</span></div>
+        <div class="row"><span class="k">扫描状态</span><span class="v">${d.scanning ? (d.scanPaused ? '<span class="chip chip-paused">⏸ 已暂停</span>' : '<span class="chip running">运行中</span>') : '空闲'}</span></div>
+        <div class="row"><span class="k">性能档位</span><span class="v"><span class="chip" style="background:#1e3a5f;color:#9fd0ff;font-weight:600">${esc(perf.label || '均衡模式')}</span><span class="muted small">&nbsp;·&nbsp; ${perf.cores || 2} 核 / ${perf.concurrent || 2} 并发</span></span></div>
         <div class="row toolbar" style="align-items:flex-start">
           <button class="btn btn-sm btn-primary" id="db-update-now">立即更新病毒库</button>
           <label class="muted small" style="display:flex;align-items:center;gap:6px;margin-left:8px">
@@ -766,8 +768,37 @@ async function renderQuarantine() {
 
 /* ------- 设置 ------- */
 async function renderSettings() {
+  let perf = { mode: 'balanced', label: '均衡模式', cores: 2, concurrent: 2 };
+  try { perf = await api('/api/perf'); } catch (e) {}
+  const PERF_OPTS = [
+    { id: 'eco',      label: '节能模式', cores: 1, concurrent: 1, desc: '最省内存 · 适用于 4 核心 + 2G RAM 设备，扫描较慢但不占内存' },
+    { id: 'balanced', label: '均衡模式', cores: 2, concurrent: 2, desc: '默认档位 · 适用于 4 核心 + 4G RAM 设备，兼顾速度与内存' },
+  ];
+  const selHint = (m) => {
+    const o = PERF_OPTS.find((x) => x.id === m) || PERF_OPTS[0];
+    return `<b>${o.label}</b> · ${o.cores} 核 / ${o.concurrent} 并发<br>${o.desc}`;
+  };
+  const segHtml = PERF_OPTS.map((o) => {
+    const active = perf.mode === o.id;
+    return `<button type="button" data-mode="${o.id}" class="perf-seg-btn${active ? ' on' : ''}"
+      style="flex:1;padding:12px 16px;border-radius:10px;border:1px solid ${active ? 'var(--primary,#3b82f6)' : 'var(--border)'};background:${active ? 'var(--primary,#3b82f6)' : 'transparent'};color:${active ? '#fff' : 'inherit'};font-weight:600;cursor:pointer;box-shadow:${active ? '0 2px 8px rgba(59,130,246,.35)' : 'none'};transition:all .18s">
+      ${o.label}
+    </button>`;
+  }).join('');
   viewShell(`
     <div style="display:flex;flex-direction:column;gap:18px;min-height:100%;">
+      <div class="card">
+        <h3>性能调节器</h3>
+        <p class="muted small" style="margin-top:0;line-height:1.8">
+          按设备内存选择扫描档位。<b>切换后无需重启，下一次扫描立即生效</b>；内存紧张设备请用「节能模式」避免卡顿。
+        </p>
+        <div style="display:flex;gap:8px">${segHtml}</div>
+        <div class="perf-hint small" style="margin-top:10px;padding:10px 12px;border-radius:8px;background:rgba(128,128,128,.06);border-left:3px solid var(--primary,#3b82f6);line-height:1.7">${selHint(perf.mode)}</div>
+        <div class="toolbar mt12" style="align-items:center">
+          <button class="btn btn-primary" id="perf-save">保存档位</button>
+          <span id="perf-status" class="muted small"></span>
+        </div>
+      </div>
       <div class="card">
         <h3>修改登录密码</h3>
         <div class="field"><label>原密码</label><input id="pw-old" type="password"></div>
@@ -781,8 +812,65 @@ async function renderSettings() {
         <div class="row"><span class="k">扫描引擎</span><span class="v">ClamAV（官方开源引擎）</span></div>
         <div class="row"><span class="k">作者</span><span class="v">很多问题的小明同学</span></div>
         <div class="row"><span class="k">GitHub</span><span class="v">@gulugulupao</span></div>
+        <div class="toolbar mt12" style="align-items:center">
+          <button class="btn" id="log-export">导出诊断日志 (.zip)</button>
+          <span class="muted small">打包 app/sentinel/clamd 日志 + 环境信息，便于发给开发者排查</span>
+        </div>
       </div>
     </div>`);
+  const segEls = $$('.perf-seg-btn');
+  let selMode = perf.mode;
+  const hintEl = $('.perf-hint');
+  const paintSeg = () => {
+    segEls.forEach((y) => {
+      const on = y.dataset.mode === selMode;
+      y.classList.toggle('on', on);
+      y.style.borderColor = on ? 'var(--primary,#3b82f6)' : 'var(--border)';
+      y.style.background = on ? 'var(--primary,#3b82f6)' : 'transparent';
+      y.style.color = on ? '#fff' : 'inherit';
+      y.style.boxShadow = on ? '0 2px 8px rgba(59,130,246,.35)' : 'none';
+    });
+    if (hintEl) hintEl.innerHTML = selHint(selMode);
+  };
+  segEls.forEach((x) => x.addEventListener('click', () => {
+    if (!x.dataset.mode) return;
+    selMode = x.dataset.mode;
+    const st = $('#perf-status'); if (st) { st.className = 'muted small'; st.textContent = ''; }
+    paintSeg();
+  }));
+  paintSeg();
+  const logBtn = $('#log-export');
+  if (logBtn) logBtn.addEventListener('click', async () => {
+    logBtn.disabled = true; logBtn.textContent = '打包中…';
+    try {
+      const resp = await fetch('/api/logs', { method: 'GET', credentials: 'same-origin' });
+      if (!resp.ok) { toast('导出失败(HTTP ' + resp.status + ')：' + (await resp.text()).slice(0, 120), 'err'); return; }
+      const blob = await resp.blob();
+      const cd = resp.headers.get('Content-Disposition') || '';
+      const m = cd.match(/filename="([^"]+)"/);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = m ? m[1] : 'clamsentinel-diagnostics.zip';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      toast('已下载诊断日志，请发送给开发者', 'ok');
+    } catch (e) { toast('导出失败: ' + (e.message || e), 'err'); }
+    finally { logBtn.disabled = false; logBtn.textContent = '导出诊断日志 (.zip)'; }
+  });
+  $('#perf-save').addEventListener('click', async () => {
+    const $st = $('#perf-status');
+    try {
+      const r = await api('/api/perf', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: selMode }) });
+      const lbl = r.label || selMode;
+      $st.className = 'ok-text small';
+      $st.textContent = '✓ 已保存：' + lbl + '（下次扫描生效）';
+      toast('性能档位已保存：' + lbl, 'ok');
+    } catch (e) {
+      $st.className = 'danger-text small';
+      $st.textContent = '✗ ' + e.message;
+      toast(e.message, 'err');
+    }
+  });
   $('#pw-save').addEventListener('click', async () => {
     if ($('#pw-new').value !== $('#pw-new2').value) return toast('两次输入的新密码不一致', 'err');
     try {

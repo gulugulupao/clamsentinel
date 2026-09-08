@@ -10,8 +10,8 @@
 [![Downloads](https://img.shields.io/github/downloads/gulugulupao/clamsentinel/total?color=green)](https://github.com/gulugulupao/clamsentinel/releases)
 
 [![License](https://img.shields.io/badge/License-MIT%20%2B%20Protection-green.svg)](LICENSE.txt)
-![Platform](https://img.shields.io/badge/Platform-fnOS%20ARM%20(RK35XX%2FA311D)-blue.svg)
-![Version](https://img.shields.io/badge/Version-V1.0.4d-orange.svg)
+![Platform](https://img.shields.io/badge/Platform-fnOS%20ARM%20(RK35XX%2FA311D%2FS905X4)-blue.svg)
+![Version](https://img.shields.io/badge/Version-V1.5-orange.svg)
 ![Engine](https://img.shields.io/badge/Engine-ClamAV%201.4.3-brightgreen.svg)
 
 **作者：[gulugulupao](https://github.com/gulugulupao) · 微信公众号：很多问题的小明同学**

@@ -62,9 +62,10 @@ TCPSocket $CLAMD_TCP
 TCPAddr 127.0.0.1
 User root
 SelfCheck 3600
-# RK3566 (4 核) + 2GB RAM 设备推荐：MaxThreads=2 + 并发 2 路 CONTSCAN，内存峰值约 400MB，
-# 留 1.6GB 给系统。空闲时 clamd 几乎不耗内存。
-MaxThreads 2
+# 并发实际由 ClamSentinel「性能调节器」在 server 端控制（CONTSCAN 并发数）。
+# 此处 MaxThreads 仅作不挡路的兜底上限——线程是惰性创建的，空闲零额外开销；
+# 均衡档最多 2 路并发，MaxThreads=8 兜底充足，切档时无需重启 clamd。
+MaxThreads 8
 MaxQueue 100
 MaxScanSize 2G
 MaxFileSize 1G

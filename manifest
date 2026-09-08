@@ -1,7 +1,7 @@
 appname               = clamsentinel
-version               = 1.0.4d
+version               = 1.5
 display_name          = ClamSentinel
-desc                  = ClamSentinel 哨兵杀毒 V1.0.4d —— ARM 版飞牛 OS 上的原生轻量防护方案。<br><br>1.ClamAV 权威病毒库：复用国际主流开源杀毒引擎的病毒库，安全可靠。<br>2.智能睡眠机制：Sentinel 守护进程空闲时自动停止 Web 与 clamd 进程，实测可释放约 1.05GB 内存（仅保留约 30MB），随叫随醒。<br>3.已实测适配 RK35XX（RK3566/3568/3399 等）与晶晨 A311D（网心云 OES 等），2GB 小运存设备专项调优。<br>4.免 Docker 独立部署：不依赖容器环境，减少一层开销，资源占用更干净
+desc                  = ClamSentinel 哨兵杀毒 V1.5 —— ARM 版飞牛 OS 上的原生轻量防护方案。<br><br>1.ClamAV 权威病毒库：复用国际主流开源杀毒引擎的病毒库，安全可靠。<br>2.智能睡眠机制：Sentinel 守护进程空闲时自动停止 Web 与 clamd 进程，实测可释放约 1.05GB 内存（仅保留约 30MB），随叫随醒。<br>3.已实测适配 RK35XX（RK3566/3576/3588 等）、晶晨（A311D/S905X4等）设备，2GB 小运存设备专项调优。<br>4.免 Docker 独立部署：不依赖容器环境，减少一层开销，资源占用更干净<br>5.性能调节器：节能/均衡 双档位，内存有限设备可选节能防卡顿，切换即时生效无需重启<br>6.诊断日志导出：一键打包 app/sentinel/clamd 日志 + 机型内存等环境信息，方便报障排查<br>7.病毒库就绪判定兼容 daily.cvd / daily.cld 两种命名（修复新版 freshclam 将增量库存为 .cld 时被误判为缺失的 bug）<br>8.前端交互增强：累计威胁可点击直达「威胁清单」、错误明细可点开查看具体路径、扫描状态实时显示当前性能档位
 source                = thirdparty
 platform              = arm
 maintainer            = 很多问题的小明同学
@@ -12,4 +12,4 @@ desktop_applaunchname = clamsentinel.Application
 service_port          = 8080
 checkport             = true
 ctl_stop              = true
-changelog             = v1.0.4d 前端交互增强：累计威胁数字可点击直达「威胁清单」、错误明细可点开查看具体路径、新增威胁清单聚合页。V1.0 阈值改 10 分钟 + abandoned 状态 + reset-password CLI + install_init 父目录权限修复 + logo 重做。v3.3.1 sentinel 幂等 + checkport=false。v3.3.0 方案 B sentinel 守护。v3.2.x 暂停/继续 + 详情 + 24h 网格。
+changelog             = v1.5 正式大版本：新增「性能调节器」（节能/均衡双档位，切换即时生效无需重启，针对 2G/4G 内存设备防卡顿）、「诊断日志导出」（一键打包 app/sentinel/clamd 日志+机型内存等环境信息供报障）、「威胁清单」聚合页，累计威胁可点击直达、错误明细可点开查看具体路径、缓存强制 no-store 不再被旧前端卡住；修复病毒库就绪误判（兼容 daily.cvd/.cld）。v1.0.4h 修复病毒库就绪误判：新版 freshclam 将每日增量库存为 daily.cld，原判定只认 daily.cvd 导致界面长期误报「病毒库未就绪（缺 daily.cvd）」；现兼容 .cvd/.cld 任一命名即视为就绪。v1.0.4g 新增「诊断日志导出」。v1.0.4f 性能调节器收窄为双档位。v1.0.4e 新增「性能调节器」。v1.0.4d 前端交互增强。V1.0 阈值改 10 分钟 + abandoned 状态 + reset-password CLI + install_init 权限修复 + logo 重做。v3.3.x 方案 B sentinel 守护 + 幂等。v3.2.x 暂停/继续 + 详情 + 24h 网格。

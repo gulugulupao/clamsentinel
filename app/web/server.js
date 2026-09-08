@@ -67,6 +67,90 @@ const SCRYPT_N = 16384;
 const MAX_BODY = 2 * 1024 * 1024;
 const STORE_THREAT_CAP = 5000;
 
+/* ---------------- 统一日志（app.log）：hook 全部 console.*，落盘 + 容量滚动 ---------------- */
+const LOG_DIR = process.env.LOG_DIR || path.join(DATA_DIR, '..', 'log');
+const LOG_FILE = path.join(LOG_DIR, 'app.log');
+const LOG_MAX_BYTES = 4 * 1024 * 1024;
+function initAppLog() {
+  try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch (_) {}
+  const real = { log: console.log, warn: console.warn, error: console.error };
+  const fmt = (a) => a.map((x) =>
+    typeof x === 'string' ? x
+    : (x instanceof Error ? (x.stack || (x.name + ': ' + x.message)) : JSON.stringify(x)));
+  const write = (line) => {
+    try {
+      fs.appendFileSync(LOG_FILE, line);
+      try {
+        if (fs.statSync(LOG_FILE).size > LOG_MAX_BYTES) {
+          try { fs.renameSync(LOG_FILE, LOG_FILE + '.1'); } catch (_) {}
+          fs.appendFileSync(LOG_FILE, '==== 滚动：旧日志已存 app.log.1 ' + new Date().toISOString() + ' ====\n');
+        }
+      } catch (_) {}
+    } catch (_) {}
+  };
+  const emit = (sink, tag, a) => { try { sink.apply(console, a); } catch (_) {} write('[' + tag + ' ' + new Date().toISOString() + '] ' + fmt(a).join(' ') + '\n'); };
+  console.log = (...a) => emit(real.log, 'log', a);
+  console.warn = (...a) => emit(real.warn, 'warn', a);
+  console.error = (...a) => emit(real.error, 'error', a);
+  write('==== ClamSentinel 启动 ' + new Date().toISOString() + ' ====\n');
+}
+initAppLog();
+function readLogFile(file, capBytes) {
+  try {
+    let b = fs.readFileSync(file);
+    if (capBytes && b.length > capBytes) b = b.slice(-capBytes);
+    return b;
+  } catch (_) { return null; }
+}
+/* ---------------- 最小 ZIP（stored，免依赖） ---------------- */
+const CRC_TABLE = (() => { const t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })();
+function crc32(buf) { let c = 0xFFFFFFFF; for (let i = 0; i < buf.length; i++) c = (c >>> 8) ^ CRC_TABLE[(c ^ buf[i]) & 0xFF]; return (c ^ 0xFFFFFFFF) >>> 0; }
+function makeZip(files) {
+  const chunks = [], cd = []; let offset = 0;
+  const now = new Date();
+  const dostime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+  const dosdate = (((now.getFullYear() - 1980) & 0x7f) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+  for (const f of files) {
+    const nb = Buffer.from(f.name, 'utf8');
+    const data = Buffer.isBuffer(f.data) ? f.data : Buffer.from(f.data, 'utf8');
+    const crc = crc32(data);
+    const ldh = Buffer.alloc(30);
+    ldh.writeUInt32LE(0x04034b50, 0); ldh.writeUInt16LE(20, 4); ldh.writeUInt16LE(0x0800, 6); ldh.writeUInt16LE(0, 8);
+    ldh.writeUInt16LE(dostime, 10); ldh.writeUInt16LE(dosdate, 12);
+    ldh.writeUInt32LE(crc, 14); ldh.writeUInt32LE(data.length, 18); ldh.writeUInt32LE(data.length, 22);
+    ldh.writeUInt16LE(nb.length, 26); ldh.writeUInt16LE(0, 28);
+    const cdh = Buffer.alloc(46);
+    cdh.writeUInt32LE(0x02014b50, 0); cdh.writeUInt16LE(20, 4); cdh.writeUInt16LE(20, 6);
+    cdh.writeUInt16LE(0x0800, 8); cdh.writeUInt16LE(0, 10); cdh.writeUInt16LE(dostime, 12); cdh.writeUInt16LE(dosdate, 14);
+    cdh.writeUInt32LE(crc, 16); cdh.writeUInt32LE(data.length, 20); cdh.writeUInt32LE(data.length, 24);
+    cdh.writeUInt16LE(nb.length, 28); cdh.writeUInt16LE(0, 30); cdh.writeUInt16LE(0, 32);
+    cdh.writeUInt16LE(0, 34); cdh.writeUInt16LE(0, 36); cdh.writeUInt32LE(0, 38);
+    cdh.writeUInt32LE(offset, 42);
+    chunks.push(ldh, nb, data); cd.push(Buffer.concat([cdh, nb]));
+    offset += ldh.length + nb.length + data.length;
+  }
+  const cdbody = Buffer.concat(cd);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(0, 4); eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(files.length, 8); eocd.writeUInt16LE(files.length, 10);
+  eocd.writeUInt32LE(cdbody.length, 12); eocd.writeUInt32LE(offset, 16); eocd.writeUInt16LE(0, 20);
+  return Buffer.concat([...chunks, cdbody, eocd]);
+}
+
+/* ---------------- 性能档位（性能调节器） ----------------
+ * 并发由 server 端同时打开的 CONTSCAN 连接数（内存压力阀）决定。
+ * clamd 的 MaxThreads 已在 cmd/main 固定为兜底值（线程惰性创建，空闲零额外开销），
+ * 因此切换档位只需改 settings.perfMode，下一次扫描立即生效，无需重启 clamd。 */
+const PERF_MODES = {
+  eco:      { label: '节能模式', cores: 1, concurrent: 1 },
+  balanced: { label: '均衡模式', cores: 2, concurrent: 2 },
+};
+const PERF_DEFAULT = 'balanced';
+function currentPerf() {
+  const m = settings && PERF_MODES[settings.perfMode] ? settings.perfMode : PERF_DEFAULT;
+  return { mode: m, ...PERF_MODES[m] };
+}
+
 /* ---------------- 存储 ---------------- */
 
 let settings = null;
@@ -99,6 +183,7 @@ async function loadSettings() {
   }
   if (typeof settings.dbAutoUpdate !== 'boolean') settings.dbAutoUpdate = true;
   if (!Number.isInteger(settings.dbAutoHour)) settings.dbAutoHour = DB_DEFAULT_AUTO_HOUR;
+  if (!PERF_MODES[settings.perfMode]) settings.perfMode = PERF_DEFAULT;
 }
 
 /* 自动更新调度：每 30 秒检查一次，到点（精确到分钟）就触发 */
@@ -487,6 +572,8 @@ async function serveStatic(req, res, urlPath) {
   const ext = path.extname(file).toLowerCase();
   securityHeaders(res);
   res.setHeader('Content-Type', MIME[ext] || 'application/octet-stream');
+  // 前端静态资源一律不缓存：应用升级后无需手动清浏览器缓存即可加载最新版本（避免旧 app.js 残留）
+  res.setHeader('Cache-Control', 'no-store');
   res.writeHead(200);
   res.end(data);
 }
@@ -740,7 +827,9 @@ async function collectFiles(abs, job) {
 const SAMPLE_FILE_CAP = 200;
 /* RK3566 + 2GB RAM 设备推荐并发数：clamd.conf MaxThreads=2 + server 端 2 路并发
  * （再大会因 fork 子进程 + 缓冲 IO 把内存推到 1GB+，2GB 设备就吃紧了） */
-const SCAN_CONCURRENCY = 2;
+/* 并发数由当前性能档位决定（PERF_MODES → settings.perfMode），无需重启，下次扫描生效。
+ * 历史参考：RK3566+2GB 推荐并发 2 路 + clamd MaxThreads 兜底 8（再大会把内存推到 1GB+）。 */
+const SCAN_CONCURRENCY = () => currentPerf().concurrent;
 
 function runClamdScan(scanPath, job) {
   return new Promise(async (resolve, reject) => {
@@ -777,7 +866,7 @@ function runClamdScan(scanPath, job) {
         if (idx.done % 50 === 0) persistJob(job).catch(() => {});
       }
     };
-    await Promise.all(Array.from({ length: SCAN_CONCURRENCY }, () => worker()));
+    await Promise.all(Array.from({ length: SCAN_CONCURRENCY() }, () => worker()));
   });
 
   function scanOneFile(filePath) {
@@ -983,6 +1072,58 @@ async function handleApi(req, res, url) {
     return sendJson(res, 200, { ok: true, auto: !!settings.dbAutoUpdate, hour: settings.dbAutoHour });
   }
 
+  /* 性能调节器：档位（eco/balanced）。GET 返回当前档位参数；POST 保存——下次扫描立即生效，无需重启 */
+  if (p === '/api/perf' && method === 'GET') {
+    return sendJson(res, 200, currentPerf());
+  }
+  if (p === '/api/perf' && method === 'POST') {
+    if (!actor.role) return sendJson(res, 403, { error: '需要管理员' });
+    const body = await bodyParser(req);
+    if (!PERF_MODES[body.mode]) return sendJson(res, 400, { error: '无效档位' });
+    settings.perfMode = body.mode;
+    await writeJsonAtomic(SETTINGS_FILE, settings);
+    touchActivity();  // 设置档位也算用户活动，避免被当作 idle 停机
+    return sendJson(res, 200, { ok: true, ...currentPerf() });
+  }
+
+  /* 诊断日志导出：打包 app.log + sentinel.log + clamd.log + 环境信息 + 近期任务，供用户下载返给开发者 */
+  if (p === '/api/logs' && method === 'GET') {
+    if (!actor.role) return sendJson(res, 403, { error: '需要管理员' });
+    touchActivity();
+    const down = (name, data) => ({ name: name, data: data });
+    const files = [];
+    const push = (name, data) => { if (data && data.length) files.push(down(name, data)); };
+    push('app.log', readLogFile(LOG_FILE, 2 * 1024 * 1024));
+    push('app.log.1', readLogFile(LOG_FILE + '.1', 2 * 1024 * 1024));
+    push('sentinel.log', readLogFile(path.join(LOG_DIR, 'sentinel.log'), 2 * 1024 * 1024));
+    push('clamd.log', readLogFile(path.join(LOG_DIR, 'clamd.log'), 3 * 1024 * 1024));
+    push('clamd.log.1', readLogFile(path.join(LOG_DIR, 'clamd.log.1'), 3 * 1024 * 1024));
+    const info = [];
+    info.push('ClamSentinel 诊断导出  ' + new Date().toISOString());
+    info.push('软件版本: V' + readVersion());
+    info.push('webInternalPort: ' + PORT);
+    info.push('性能档位: ' + currentPerf().label + ' (mode=' + settings.perfMode + ')');
+    info.push('病毒库自动更新: ' + (settings.dbAutoUpdate ? ('每天 ' + settings.dbAutoHour + ':00') : '关闭'));
+    info.push('空闲停止: 由 sentinel 接管（24 分钟无活动自动停 web+clamd）');
+    info.push('---- CPU ----');
+    try { info.push(fs.readFileSync('/proc/cpuinfo', 'utf8').split('\n').filter((l) => /^(Hardware|model name|Processor)/.test(l)).slice(0, 4).join('\n')); } catch (_) {}
+    info.push('---- 内存 ----');
+    try { info.push(fs.readFileSync('/proc/meminfo', 'utf8').split('\n').filter((l) => /^MemTotal|^MemAvailable|^SwapTotal|^SwapFree/.test(l)).join('\n')); } catch (_) {}
+    push('info.txt', Buffer.from(info.join('\n') + '\n', 'utf8'));
+    try {
+      const names = fs.readdirSync(JOBS_DIR).filter((n) => n.endsWith('.json')).sort().slice(-15);
+      for (const n of names) push('jobs/' + n, readLogFile(path.join(JOBS_DIR, n), 512 * 1024));
+    } catch (_) {}
+    const zip = makeZip(files);
+    res.writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': 'attachment; filename="clamsentinel-diagnostics-V' + readVersion() + '.zip"',
+      'Content-Length': zip.length,
+      'Cache-Control': 'no-store',
+    });
+    return res.end(zip);
+  }
+
   /* 扫描任务：暂停 / 继续 —— 立即持久化以让前端 /api/jobs 立刻看到 paused 字段变化 */
   if (p === '/api/scan/pause' && method === 'POST') {
     if (!running) return sendJson(res, 400, { error: '当前没有扫描任务' });
@@ -1079,18 +1220,26 @@ async function handleApi(req, res, url) {
     const dbBuild = (engineText.match(/\/(\d+)\//) || [])[1] || null;
     let dbInfo = { present: false, updated: null, build: null, files: [], downloading: false, missing: [] };
     try {
-      // V1.0z: main.cvd + daily.cvd 必须齐全才算就绪（bytecode.cvd 可选，仅影响解包能力），
-      // 避免"只下了 daily 就判定就绪"导致重启后不再触发首跑、长期缺 main.cvd。
-      const dbFiles = ['main.cvd', 'daily.cvd', 'bytecode.cvd'];
-      const required = ['main.cvd', 'daily.cvd'];
+      // 日常增量库可能是 daily.cvd 或 daily.cld 任一形态（新版 freshclam 常直接下载为 daily.cld，属正常），
+      // 因此按"逻辑库名"检测，任一扩展存在即视为该库已就绪。
+      // main + daily 必须齐全才算就绪（bytecode 可选，仅影响解包能力），
+      // 避免只下 partial 就判定就绪，导致重启后不再触发首补、长期缺 main.cvd。
+      const dbNames = ['main', 'daily', 'bytecode'];
+      const required = ['main', 'daily'];
       let bestMtime = null;
       const presentFiles = [];
-      for (const f of dbFiles) {
-        try {
-          const st = await fsp.stat(path.join(DB_MOUNT, f));
-          presentFiles.push(f);
+      const missing = [];
+      for (const nm of dbNames) {
+        let found = null, st = null;
+        for (const ext of ['cvd', 'cld']) {
+          try { st = await fsp.stat(path.join(DB_MOUNT, nm + '.' + ext)); found = nm + '.' + ext; break; } catch (e) {}
+        }
+        if (found && st) {
+          presentFiles.push(found);
           if (!bestMtime || st.mtime > bestMtime) bestMtime = st.mtime;
-        } catch (e) {}
+        } else if (required.indexOf(nm) >= 0) {
+          missing.push(nm);
+        }
       }
       // freshclam 下载期间会在库目录建 tmp.xxxx 临时目录，据此判断"正在下载"
       let downloading = false;
@@ -1098,10 +1247,12 @@ async function handleApi(req, res, url) {
         const ents = await fsp.readdir(DB_MOUNT);
         downloading = ents.some((n) => n.indexOf('tmp.') === 0);
       } catch (e) { downloading = false; }
-      const missing = required.filter((f) => presentFiles.indexOf(f) < 0);
-      if (missing.length === 0) {
+      if (missing.length === 0 && presentFiles.length) {
         let dbSize = 0;
-        try { dbSize = (await fsp.stat(DB_MOUNT)).size || 0; } catch (e) { dbSize = 0; }
+        try {
+          const ents = await fsp.readdir(DB_MOUNT);
+          await Promise.all(ents.map((n) => fsp.stat(path.join(DB_MOUNT, n)).then((x) => { dbSize += x.size; }).catch(() => 0)));
+        } catch (e) { dbSize = 0; }
         dbInfo = {
           present: true,
           updated: bestMtime.toISOString(),
